@@ -243,19 +243,22 @@ class CoarseMatching(nn.Module):
         scale0 = scale * data['scale0'][b_ids] if 'scale0' in data else scale
         scale1 = scale * data['scale1'][b_ids] if 'scale1' in data else scale
         mkpts0_c = torch.stack(
-            [i_ids % data['hw0_c'][1], i_ids // data['hw0_c'][1]],
+            [i_ids % data['hw0_c'][1], torch.div(i_ids, data['hw0_c'][1], rounding_mode='trunc')],
             dim=1) * scale0
         mkpts1_c = torch.stack(
-            [j_ids % data['hw1_c'][1], j_ids // data['hw1_c'][1]],
+            [j_ids % data['hw1_c'][1], torch.div(j_ids, data['hw1_c'][1], rounding_mode='trunc')],
             dim=1) * scale1
 
         # These matches is the current prediction (for visualization)
+        coarse_pred_mask = mconf != 0
         coarse_matches.update({
-            'gt_mask': mconf == 0,
-            'm_bids': b_ids[mconf != 0],  # mconf == 0 => gt matches
-            'mkpts0_c': mkpts0_c[mconf != 0],
-            'mkpts1_c': mkpts1_c[mconf != 0],
-            'mconf': mconf[mconf != 0]
+            'gt_mask': ~coarse_pred_mask,
+            'm_bids': b_ids[coarse_pred_mask],  # mconf == 0 => gt matches
+            'm_iids': i_ids[coarse_pred_mask],
+            'm_jids': j_ids[coarse_pred_mask],
+            'mkpts0_c': mkpts0_c[coarse_pred_mask],
+            'mkpts1_c': mkpts1_c[coarse_pred_mask],
+            'mconf': mconf[coarse_pred_mask]
         })
 
         return coarse_matches

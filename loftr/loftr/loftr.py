@@ -26,7 +26,7 @@ class LoFTR(nn.Module):
         self.loftr_fine = LocalFeatureTransformer(config["fine"])
         self.fine_matching = FineMatching()
 
-    def forward(self, data):
+    def forward(self, data, coarse_only=False):
         """ 
         Update:
             data (dict): {
@@ -65,6 +65,8 @@ class LoFTR(nn.Module):
 
         # 3. match coarse-level
         self.coarse_matching(feat_c0, feat_c1, data, mask_c0=mask_c0, mask_c1=mask_c1)
+        if coarse_only:
+            return
 
         # 4. fine-level refinement
         feat_f0_unfold, feat_f1_unfold = self.fine_preprocess(feat_f0, feat_f1, feat_c0, feat_c1, data)
