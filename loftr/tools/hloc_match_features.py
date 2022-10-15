@@ -342,7 +342,7 @@ def main():  # Testinng
     images = [p.relative_to(image_dir).as_posix() for p in image_dir.iterdir()]
     images = images[:8]
     pairs_from_exhaustive.main(hloc_dir / args.pairs_fn, image_list=images)
-    process_instance(args, images)
+    process_instance(args, images, block=True)
 
 
 if __name__ == '__main__':
