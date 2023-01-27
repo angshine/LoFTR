@@ -8,6 +8,7 @@ FIXME:
     - ProgressBar block worker exceptions.
 """
 
+import shutil
 import ray
 import argparse
 from pathlib import Path
@@ -23,12 +24,23 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from hloc import pairs_from_exhaustive
 from hloc.utils.parsers import names_to_pair
+from hloc.match_features import find_unique_new_pairs
 from vcore.common.ray import ProgressBar
 from loftr.loftr import LoFTR, default_cfg
 from loftr.config.default import get_cfg_defaults
 from loftr.utils.misc import lower_config
 
 LOFTR_PATH = str(Path(__file__).parents[2])
+
+
+def list_h5_names(path):
+    names = []
+    with h5py.File(str(path), 'r') as fd:
+        def visit_fn(_, obj):
+            if isinstance(obj, h5py.Dataset):
+                names.append(obj.parent.name.strip('/'))
+        fd.visititems(visit_fn)
+    return list(set(names))
 
 
 class MatchDataset(Dataset):
@@ -101,7 +113,7 @@ class MatchSaver(object):
         self.f_matches.close()
 
 
-@ray.remote(num_cpus=2, num_gpus=1)
+@ray.remote(num_cpus=1, num_gpus=1)
 class MatchExtrator(object):
     def __init__(self, args, rank, world_size, queue, coarse_hws_cached):
         dataset = build_dataset(args)
@@ -255,12 +267,13 @@ def build_pseudo_features(image_dir, image_list, save_dir, save_fn='features.h5'
 
 def get_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--root_dir', type=Path, default='/raid/yuang/Data/CO3D_V2/chair/306_32174_60387')
+    parser.add_argument('--root_dir', type=Path, default='/raid/yuang/Data/CO3D_V2/chair/380_45217_90441')
     parser.add_argument('--hloc_dirname', type=str, default='hloc_loftr_outputs')
     parser.add_argument('--image_dirname', type=str, default='images')
     parser.add_argument('--pairs_fn', type=str, default='pairs-sfm.txt')
     parser.add_argument('--features_fn', type=str, default='features.h5')
     parser.add_argument('--matches_fn', type=str, default='matches.h5')
+    parser.add_argument('--force_rerun', action='store_true')
     
     parser.add_argument('--max_area', type=int, default=1920000)
     parser.add_argument('--df', type=int, default=8)
@@ -293,7 +306,48 @@ def build_dataloader(args, dataset, rank, world_size):
     return loader
 
 
+def check_existence(args, image_list):
+    hloc_dir = args.root_dir / args.hloc_dirname
+    features_path = hloc_dir / args.features_fn
+    matches_path = hloc_dir / args.matches_fn
+    if not (features_path.exists() and matches_path.exists()) or args.force_rerun:
+        logger.info(f'Features & matches already extracted: {str(hloc_dir)}, skipped!')
+        return False
+    
+    try:
+        with h5py.File(features_path, 'r') as ff, h5py.File(matches_path) as mf:
+            pass
+    except OSError as err:
+        logger.warning('At least one of the features & the matches file is corrupted, rerun matching...\n'
+                       f'{err}\n'
+                       f' ({str(features_path)},{str(matches_path)})')
+        features_path.unlink()
+        matches_path.unlink()
+        return False
+    
+    features_all_done, matches_all_done = False, False
+    if features_path.exists():
+        skip_feature_names = list_h5_names(features_path)
+        if set(image_list).issubset(set(skip_feature_names)):
+            features_all_done = True
+    if matches_path.exists():
+        pairs_path = hloc_dir / args.pairs_fn
+        with open(pairs_path, "r") as f:
+            pairs = f.read().rstrip('\n').split('\n')
+        pairs = [tuple(pair.split()) for pair in pairs]
+        pairs = find_unique_new_pairs(pairs_all=pairs, match_path=matches_path)
+        if len(pairs) == 0:
+            matches_all_done = True
+    
+    # TODO: return unmatched pairs
+    return features_all_done and matches_all_done
+
+
 def process_instance(args, image_list, block=True):  # process a single instance
+    if check_existence(args, image_list):
+        logger.info(f'Instance ({"/".join(args.root_dir.parts[-2:])}) already processed, skipping...')
+        return
+        
     args.root_stem = args.root_dir.stem
     coarse_scale = 8  # TODO: extract coarse_scale from LoFTR config
     feature_path, coarse_hws_cached = build_pseudo_features(
@@ -304,9 +358,9 @@ def process_instance(args, image_list, block=True):  # process a single instance
         max_area=args.max_area, df=args.df, coarse_scale=coarse_scale,
         as_half=True
     )
-
+    
     if not ray.is_initialized():
-        ray.init(num_cpus=args.n_workers * 2 + 1, num_gpus=args.n_workers,
+        ray.init(num_cpus=args.n_workers + 1, num_gpus=args.n_workers,
                  ignore_reinit_error=False)  # TODO: reuse workers?
     queue = Queue()
     _dataset = build_dataset(args)
@@ -341,7 +395,7 @@ def main():  # Testinng
     image_dir = args.root_dir / args.image_dirname
     images = [p.relative_to(image_dir).as_posix() for p in image_dir.iterdir()]
     images = images[:8]
-    pairs_from_exhaustive.main(hloc_dir / args.pairs_fn, image_list=images)
+    # pairs_from_exhaustive.main(hloc_dir / args.pairs_fn, image_list=images)
     process_instance(args, images, block=True)
 
 
