@@ -14,7 +14,6 @@ from PIL import Image
 from ray.experimental import tqdm_ray
 from ray.util.queue import Queue
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
-from vcore.common.ray import ProgressBar
 
 from loftr.config.default import get_cfg_defaults
 from loftr.loftr import LoFTR, default_cfg
@@ -80,10 +79,9 @@ class MatchDataset(Dataset):
 
 @ray.remote(num_cpus=1)
 class MatchSaver(object):
-    def __init__(self, save_dir, save_fn, n_pairs, queue, pba):
+    def __init__(self, save_dir, save_fn, n_pairs, queue):
         self.save_path = Path(save_dir) / save_fn
         self.queue = queue
-        self.pba = pba
         if self.save_path.exists():
             self.save_path.unlink()
         self.f_matches = h5py.File(self.save_path, "a")
@@ -106,7 +104,6 @@ class MatchSaver(object):
             grp = self.f_matches.create_group(pair_name)
             grp.create_dataset("matches0", data=data["matches0"])
             grp.create_dataset("matching_scores0", data=data["matching_scores0"])
-            # self.pba.update.remote(1)
             pbar.update()
             _cntr += 1
         self.f_matches.close()
@@ -368,8 +365,7 @@ def process_instance(args, image_list, block=True):  # process a single instance
     queue = Queue()
     _dataset = build_dataset(args)
     n_pairs = len(_dataset)
-    pb = ProgressBar(n_pairs, f"[{args.root_stem}] Extracting Matches")
-    match_saver = MatchSaver.remote(args.root_dir / args.hloc_dirname, args.matches_fn, n_pairs, queue, pb.actor)
+    match_saver = MatchSaver.remote(args.root_dir / args.hloc_dirname, args.matches_fn, n_pairs, queue)
     match_saver_ref = match_saver.run.remote()
     # -- init & run MatchActors
     match_extractors = [
@@ -379,7 +375,6 @@ def process_instance(args, image_list, block=True):  # process a single instance
     obj_refs = [*match_extractor_refs, match_saver_ref]
 
     if block:
-        pb.print_until_done()
         ray.get(obj_refs)
         # ray.shutdown()
         logger.info(f"[{args.root_stem}] matches for {n_pairs} pairs extracted!")
