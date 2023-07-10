@@ -1,4 +1,5 @@
 import argparse
+import sys
 from pathlib import Path
 
 import cv2
@@ -15,11 +16,11 @@ from ray.experimental import tqdm_ray
 from ray.util.queue import Queue
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
+LOFTR_PATH = str(Path(__file__).parents[2])
+
 from loftr.config.default import get_cfg_defaults
 from loftr.loftr import LoFTR, default_cfg
 from loftr.utils.misc import lower_config
-
-LOFTR_PATH = str(Path(__file__).parents[2])
 
 
 def list_h5_names(path):
