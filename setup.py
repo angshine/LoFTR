@@ -12,7 +12,7 @@ setup(
     name="LoFTR",
     version="0.1",
     packages=find_packages(),
-    python_requires=">=3.9",
+    python_requires=">=3.8",
     description=description,
     long_description=readme,
     long_description_content_type="text/markdown",
